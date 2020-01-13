@@ -1,17 +1,20 @@
 ﻿using ChatServer.DataAccess;
+using ChatServer.Domain;
+using Newtonsoft.Json;
 using System;
-using System.Collections.Generic;
+using System.Data.Entity;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace ChatServer
 {
     class Program
     {
-        static void Main(string[] args)
+        static async Task Main(string[] args)
         {
             using (var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp))
             //using (var context = new ChatContext())
@@ -27,24 +30,45 @@ namespace ChatServer
 
                 while (true)
                 {
-                    var incomingSocket = socket.Accept(); //Блокирует поток, пока не получит сообщение
+                    var incomingSocket = await socket.AcceptAsync(); //Блокирует поток, пока не получит сообщение
                     Console.WriteLine($"Получено входящее сообщение.");
-                    while (incomingSocket.Available > 0)
-                    {
-                        var buffer = new byte[incomingSocket.Available];
-                        incomingSocket.Receive(buffer);
-                        var mes = Encoding.UTF8.GetString(buffer);
-                        var user = mes.Substring(0, mes.LastIndexOf("|userMessage|"));
-                        var text = mes.Substring(mes.LastIndexOf("|userMessage|")+13);
-                        var s = mes.Split( new[] { "qwe" }, StringSplitOptions.None);
-                        Console.WriteLine($"{user} : {text}");
-                        incomingSocket.Send(Encoding.UTF8.GetBytes("Вернись в палату, долбоеб"));
-                    }
-
-                    incomingSocket.Close();
-                    Console.WriteLine("Ожидается еще.");
+                    await GetMessage(incomingSocket);
+                    await SendMessages(socket);
                 }
             }
+        }
+
+        static public async Task SendMessages(Socket socket)
+        {
+            using (var context = new ChatContext())
+            {
+                var messages = await context.Messages.ToListAsync();
+                var json = JsonConvert.SerializeObject(messages);
+
+                var sendData = Encoding.UTF8.GetBytes(json);
+                ArraySegment<byte> data = new ArraySegment<byte>(sendData);
+                var res = await socket.SendAsync(data, SocketFlags.None);
+                Console.WriteLine("Сообщения обновились.");
+            }
+        }
+
+        static public async Task GetMessage(Socket incomingSocket)
+        {
+            var stringBuilder = new StringBuilder();
+            while (incomingSocket.Available > 0)
+            {
+                var buffer = new byte[1024];
+                ArraySegment<byte> data = new ArraySegment<byte>(buffer);
+                await incomingSocket.ReceiveAsync(data, SocketFlags.None);
+                stringBuilder.Append(Encoding.UTF8.GetString(buffer));
+            }
+            using (var context = new ChatContext())
+            {
+                var message = JsonConvert.DeserializeObject<Message>(stringBuilder.ToString());
+                context.Messages.Add(message);
+                await context.SaveChangesAsync();
+            }
+            incomingSocket.Send(Encoding.UTF8.GetBytes("Вернись в палату, долбоеб"));
         }
     }
 }
